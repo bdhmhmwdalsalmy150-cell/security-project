@@ -1,0 +1,25 @@
+name: Security Scan (SAST)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  semgrep:
+     name: Run Semgrep Security Scan
+     runs-on: ubuntu-latest
+
+     permissions:
+       contents: read
+       security-events: write
+
+     steps:
+       - name: Checkout code
+         uses: actions/checkout@v4
+
+       - name: Scan code for vulnerabilities
+         uses: semgrep/semgrep-action@v1
+         with:
+           config: auto
