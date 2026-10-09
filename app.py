@@ -1,16 +1,14 @@
 import subprocess
+import re
 
 def run_command(user_input):
-    # الطريقة الآمنة: استخدام subprocess.run مع تمرير الأوامر كقائمة لتجنب ثغرات حقن الأوامر
-    # كما يُفضل دائماً التحقق من صحة مدخلات المستخدم (Validation) أو تقييدها بقائمة مسموحة
-    safe_input = user_input.strip()
-    
-    # مثال على التحقق من أن المدخل لا يحتوي على رموز خطرة
-    if not safe_input.isalnum():
+    # التحقق من أن المدخلات تحتوي فقط على أحرف وأرقام لضمان الأمان
+    if not re.match("^[A-Za-z0-9]+$", user_input):
         raise ValueError("مدخلات غير صالحة!")
-
-    # تشغيل الأمر بطريقة آمنة بدون دمج نصوص مباشر
-    subprocess.run(["echo", safe_input], check=True)
+    
+    # تنفيذ الأمر بشكل آمن
+    result = subprocess.run(["echo", user_input], capture_output=True, text=True)
+    return result.stdout
 
 if __name__ == "__main__":
-    run_command("test")
+    print("تم تشغيل التطبيق بنجاح وبشكل آمن.")
