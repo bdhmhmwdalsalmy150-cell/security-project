@@ -1,10 +1,11 @@
 from flask import Flask, request, render_template_string, abort
 import re
 import logging
+import sys
 
-# إعداد نظام تسجيل السجلات (Logging) لمراقبة الهجمات
+# إعداد نظام تسجيل السجلات ليظهر مباشرة في سطر الأوامر وسجلات Railway
 logging.basicConfig(
-    filename='security_audit.log',
+    stream=sys.stdout,
     level=logging.INFO,
     format='%(asctime)s - IP: %(ip)s - User-Agent: %(agent)s - Payload: %(payload)s - Message: %(message)s'
 )
