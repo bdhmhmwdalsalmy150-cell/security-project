@@ -1,27 +1,27 @@
-from flask import Flask, render_template_string, request, make_response
+from flask import Flask, request, render_template_string, abort
 import re
-import subprocess
+import logging
+
+# إعداد نظام تسجيل السجلات (Logging) لمراقبة الهجمات
+logging.basicConfig(
+    filename='security_audit.log',
+    level=logging.INFO,
+    format='%(asctime)s - IP: %(ip)s - User-Agent: %(agent)s - Payload: %(payload)s - Message: %(message)s'
+)
+logger = logging.getLogger('WAF_Logger')
 
 app = Flask(__name__)
 
-# 1. إضافة رؤوس الأمان (Security Headers) لكل الطلبات
-@app.after_request
-def add_security_headers(response):
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    return response
+# قائمة الأنماط والرموز المحظورة لمحاكاة جدار الحماية (WAF)
+MALICIOUS_PATTERNS = [
+    r"<script.*?>.*?</script.*?>",  # XSS
+    r"union\s+select",              # SQL Injection
+    r"or\s+1=1",                    # SQL Injection Bypass
+    r"[';--]",                      # رموز SQL وخطوط الحظر
+    r"drop\s+table",                # SQL Destruction
+    r"exec\s*\(",                   # Code Execution
+]
 
-# 2. صفحات الأخطاء المخصصة لمنع تسريب معلومات النظام والحمسارات الحساسة
-@app.errorhandler(404)
-def page_not_found(e):
-    return "<h3>404 - الصفحة غير موجودة أو المسار محظور</h3>", 404
-
-@app.errorhandler(500)
-def internal_server_error(e):
-    return "<h3>500 - حدث خطأ داخلي في الخادم</h3>", 500
-
-# واجهة تطبيق الويب والفلتر الأمني (WAF Simulation)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -29,49 +29,82 @@ HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <title>فحص الأمان ومحاكاة WAF</title>
     <style>
-        body { font-family: Tahoma, sans-serif; background-color: #f4f7f6; text-align: center; padding-top: 50px; }
-        .card { background: white; width: 500px; margin: auto; padding: 30px; border-radius: 8px; box-shadow: 0px 4px 10px rgba(0,0,0,0.1); }
-        input[type="text"] { width: 80%; padding: 10px; margin: 15px 0; border: 1px solid #ccc; border-radius: 4px; }
-        button { background-color: #5c6bc0; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
-        button:hover { background-color: #3f51b5; }
-        .alert { color: #d32f2f; font-weight: bold; margin-top: 15px; }
-        .success { color: #388e3c; font-weight: bold; margin-top: 15px; }
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; background-color: #f4f4f9; }
+        h2 { color: #333; }
+        form { margin-top: 20px; }
+        input[type="text"] { padding: 10px; width: 300px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 10px 20px; background-color: #4F46E5; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background-color: #4338CA; }
+        .alert { color: #DC2626; font-weight: bold; margin-top: 20px; font-size: 18px; }
+        .success { color: #16A34A; font-weight: bold; margin-top: 20px; font-size: 18px; }
     </style>
 </head>
 <body>
-    <div class="card">
-        <h2>فحص الأمان ومحاكاة WAF</h2>
-        <form method="POST">
-            <input type="text" name="user_input" placeholder="أدخل النص أو الأمر هنا..." required>
-            <br>
-            <button type="submit">إرسال وفحص</button>
-        </form>
-        {% if result %}
-            <div class="{{ status }}">
-                {{ result }}
-            </div>
-        {% endif %}
-    </div>
+    <h2>فحص الأمان ومحاكاة WAF</h2>
+    <form method="POST">
+        <input type="text" name="user_input" placeholder="أدخل النص أو الأمر هنا..." required>
+        <br><br>
+        <button type="submit">إرسال وفحص</button>
+    </form>
+    {% if message %}
+        <div class="{{ status }}">{{ message }}</div>
+    {% endif %}
 </body>
 </html>
 """
 
-@app.route("/", methods=["GET", "POST"])
+@app.route('/', methods=['GET', 'POST'])
 def home():
-    result = None
+    message = None
     status = None
-    if request.method == "POST":
-        user_input = request.form.get("user_input", "")
+    
+    if request.method == 'POST':
+        user_input = request.form.get('user_input', '')
         
-        # فلتر الأمان (WAF Rule): السماح فقط بالحروف، الأرقام، المسافات، والشرطات
-        if not re.match(f"^[a-zA-Z0-9\\s_\\-]+$", user_input):
-            result = "Security Alert: Malicious or invalid characters detected! Request blocked."
+        # استخراج عنوان الـ IP الحقيقي للمهاجم (خصوصاً عند العمل خلف بروكسي مثل Railway)
+        client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+        user_agent = request.headers.get('User-Agent', 'Unknown')
+        
+        # فحص المدخلات عبر مطابقة الأنماط الضارة
+        is_malicious = False
+        for pattern in MALICIOUS_PATTERNS:
+            if re.search(pattern, user_input, re.IGNORECASE):
+                is_malicious = True
+                break
+                
+        if is_malicious:
+            # تسجيل تفاصيل الهجوم في السجلات
+            logger.warning("Blocked malicious input", extra={
+                'ip': client_ip,
+                'agent': user_agent,
+                'payload': user_input,
+                'message': 'WAF Blocked Attack'
+            })
+            
+            message = "Security Alert: Malicious or invalid characters detected! Blocked by WAF/Input Filter"
             status = "alert"
         else:
-            result = f"Input passed WAF securely: {user_input}"
+            message = f"Success: Input is safe and accepted! (Value: {user_input})"
             status = "success"
             
-    return render_template_string(HTML_TEMPLATE, result=result, status=status)
+    return render_template_string(HTML_TEMPLATE, message=message, status=status)
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+# تفعيل رؤوس الأمان لحماية التطبيق
+@app.after_request
+def set_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    return response
+
+# معالجة الأخطاء المخصصة لمنع كشف المسارات الداخلية
+@app.errorhandler(404)
+def page_not_found(e):
+    return "<h2 style='text-align:center; margin-top:50px; color:#DC2626;'>404 - الصفحة غير موجودة أو المسار محظور</h2>", 404
+
+@app.errorhandler(500)
+def internal_server_error(e):
+    return "<h2 style='text-align:center; margin-top:50px; color:#DC2626;'>500 - حدث خطأ داخلي في الخادم</h2>", 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
